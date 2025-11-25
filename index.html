@@ -1,0 +1,128 @@
+#include <Servo.h>
+#include <ESP8266WiFi.h>
+#include <WebSocketsServer.h>
+
+// Pinos
+const int trigPin = D6;
+const int echoPin = D5;
+const int servoPin = D3;
+const int buzzerPin = D4;
+const int ledVerde = D7;
+const int ledVermelho = D8;
+
+// Configurações
+#define VELOCIDADE_SOM 0.034
+#define DISTANCIA_ALERTA 20
+#define ANGLE_INCREMENT 3
+
+// WiFi e WebSocket
+const char* ssid = "Seu_SSID";
+const char* password = "Sua_Senha";
+WebSocketsServer webSocket = WebSocketsServer(81);
+
+Servo meuServo;
+int angulo = 0;
+bool direcao = true;
+bool objetoDetectado = false;
+
+void setup() {
+  Serial.begin(115200);
+  
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+  pinMode(buzzerPin, OUTPUT);
+  pinMode(ledVerde, OUTPUT);
+  pinMode(ledVermelho, OUTPUT);
+  
+  meuServo.attach(servoPin);
+  digitalWrite(ledVerde, HIGH);
+  
+  // Conecta ao WiFi
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("");
+  Serial.print("Conectado a ");
+  Serial.println(ssid);
+  Serial.print("IP: ");
+  Serial.println(WiFi.localIP());
+  
+  // Inicia servidor WebSocket
+  webSocket.begin();
+  webSocket.onEvent(webSocketEvent);
+}
+
+void loop() {
+  webSocket.loop();
+  
+  // Movimento do servo
+  if (!objetoDetectado) {
+    if (direcao) {
+      angulo += ANGLE_INCREMENT;
+      if (angulo >= 180) {
+        direcao = false;
+        angulo = 180;
+      }
+    } else {
+      angulo -= ANGLE_INCREMENT;
+      if (angulo <= 0) {
+        direcao = true;
+        angulo = 0;
+      }
+    }
+    meuServo.write(angulo);
+  }
+
+  // Medição
+  float distancia = medirDistancia();
+  
+  // Controle de alerta
+  if (distancia <= DISTANCIA_ALERTA && distancia > 0) {
+    if (!objetoDetectado) {
+      objetoDetectado = true;
+      digitalWrite(ledVerde, LOW);
+      digitalWrite(ledVermelho, HIGH);
+    }
+    tone(buzzerPin, 1000, 100);
+  } else {
+    if (objetoDetectado) {
+      objetoDetectado = false;
+      digitalWrite(ledVerde, HIGH);
+      digitalWrite(ledVermelho, LOW);
+      noTone(buzzerPin);
+    }
+  }
+
+  // Envia dados via WebSocket
+  String jsonData = "{\"angle\":" + String(angulo) + ",\"distance\":" + String(distancia) + "}";
+  webSocket.broadcastTXT(jsonData.c_str(), jsonData.length());
+  
+  delay(50);
+}
+
+float medirDistancia() {
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+  
+  long duracao = pulseIn(echoPin, HIGH);
+  return duracao * VELOCIDADE_SOM / 2;
+}
+
+void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
+  switch(type) {
+    case WStype_DISCONNECTED:
+      Serial.printf("[%u] Desconectado!\n", num);
+      break;
+    case WStype_CONNECTED:
+      {
+        IPAddress ip = webSocket.remoteIP(num);
+        Serial.printf("[%u] Conectado em %d.%d.%d.%d\n", num, ip[0], ip[1], ip[2], ip[3]);
+      }
+      break;
+  }
+}
